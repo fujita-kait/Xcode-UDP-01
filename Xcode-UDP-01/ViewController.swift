@@ -16,6 +16,8 @@
 //  Modify IP address in "private func startConnection()"
 //  To verify this, do the following on the PC/MAC before click SEND button
 //  > nc -lu 3610
+//  Destination IPをECHONET Liteのマルチキャストアドレス 224.0.23.0 を指定した場合
+//  netcatでは受信確認できない。Wiresharkでは確認できる。udp.port==3610でフィルターをかけること。
 
 import UIKit
 import Foundation
@@ -36,46 +38,52 @@ class ViewController: UIViewController {
     
     //    receive
     func receiveUDP() {
-        let myQueue  = DispatchQueue.global()
+        // multicasting: START
+        guard let multicast = try? NWMulticastGroup(for:
+            [ .hostPort(host: "224.0.23.0", port: 3610) ])
+            else { fatalError() }
+        let group = NWConnectionGroup(with: multicast, using: .udp)
+        group.setReceiveHandler(maximumMessageSize: 16384, rejectOversizedMessages: true) { (message, content, isComplete) in
+            print("Received message from \(String(describing: message.remoteEndpoint))")
+            if let content = content, let message = String(data: content, encoding: .utf8) {
+                print("Received Message: \(message)")
+            }
+        }
+        group.stateUpdateHandler = { (newState) in
+            print("Group entered state \(String(describing: newState))")
+        }
+        group.start(queue: .main)
+        // multicasting: END
+
+        // unicasting: START
         do {
-            let listener = try NWListener(using: .udp, on: 3610)
+//            let listener = try NWListener(using: .udp, on: 3610)
+            let listener = try NWListener(using: .udp, on: 3611)
             listener.newConnectionHandler = { (newConnection) in
                 // Handle inbound connections
                 print("connection OK")
-                newConnection.start(queue: myQueue)
+                newConnection.start(queue: .main)
                 self.receive(on: newConnection)
             }
 
             listener.stateUpdateHandler = { (newState) in
-                switch newState {
-                    case .setup:
-                        print("listner state is setup")
-                    case .waiting:
-                        print("listner state is waiting")
-                    case .ready:
-                        print("listner state is ready")
-                    case .failed:
-                        print("listner state is failed")
-                    case .cancelled:
-                        print("listner state is cancelled")
-                    default:
-                        print("listner state is error!")
-                }
+                print("listener entered state \(String(describing: newState))")
             }
-            
             print("listener start")
-            listener.start(queue: myQueue)
+            listener.start(queue: .main)
         }
         catch {
             print("Error", error)
         }
+        // unicasting: END
+
     }
     
     private func receive(on connection: NWConnection) {
         connection.receiveMessage { (data: Data?, contentContext: NWConnection.ContentContext?, aBool: Bool, error: NWError?) in
-            print(data!)
+            print("Received message from \(String(describing: connection.endpoint))")
             if let data = data, let message = String(data: data, encoding: .utf8) {
-                print("Received Message: \(message)")
+                print("Received Message(unicast): \(message)")
             }
 
             if let error = error {
@@ -92,6 +100,7 @@ class ViewController: UIViewController {
         let udpParams = NWParameters.udp
         // 送信先エンドポイント
         let endpoint = NWEndpoint.hostPort(host: "192.168.1.14", port: 3610)
+//        let endpoint = NWEndpoint.hostPort(host: "224.0.23.0", port: 3610)
         connection = NWConnection(to: endpoint, using: udpParams)
         
         connection.stateUpdateHandler = { (state: NWConnection.State) in
@@ -100,8 +109,8 @@ class ViewController: UIViewController {
         }
         
         // コネクション開始
-        let connectionQueue = DispatchQueue(label: "com.shu223.NetworkPlayground.sender")
-        connection.start(queue: connectionQueue)
+        let myQueue  = DispatchQueue.global()
+        connection.start(queue: myQueue)
     }
 
     func send(message: String) {
